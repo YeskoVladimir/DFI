@@ -4,7 +4,7 @@ from uuid import UUID
 from fastapi import HTTPException
 
 from models import Item
-from transactions import Transaction
+from transactions import Transaction, TransactionException
 
 
 class Service:
@@ -34,8 +34,8 @@ class Service:
 
             return transaction_id
 
-        parent = self._get_transaction(transaction_id)
-
+        parent = self._get_transaction(parent_id)
+        parent.active_child.append(transaction_id)
         transaction = Transaction(storage=self.storage, parent=parent)
         self.transactions[transaction_id] = transaction
 
@@ -43,9 +43,21 @@ class Service:
 
     def commit(self, transaction_id: UUID) -> None:
         transaction = self._get_transaction(transaction_id)
-        new_storage = transaction.commit()
-        self.storage = new_storage
-        del self.transactions[transaction_id]
+        if active_child := transaction.active_child:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Transaction has active child: {active_child}."
+            )
+        try:
+            if new_storage := transaction.commit(transaction_id):
+                self.storage = new_storage
+                del self.transactions[transaction_id]
+        except TransactionException:
+            del self.transactions[transaction_id]
+            raise HTTPException(
+                status_code=404,
+                detail=f"Transaction {transaction_id} exception"
+            )
 
     def rollback(self, transaction_id: UUID) -> None:
         transaction = self._get_transaction(transaction_id)

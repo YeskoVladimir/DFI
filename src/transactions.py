@@ -4,12 +4,16 @@ from uuid import UUID
 from models import Item, Action
 
 
+class TransactionException(Exception):
+    pass
+
+
 class Transaction:
     def __init__(self, storage: list[Item], parent=None):
         self.storage = storage
         self.parent = parent
-        self.backup: list[Item] = storage.copy()
         self.changes: list[tuple[Action, Any]] = []
+        self.active_child: list[UUID] = []
 
     def insert(self, record: Item) -> None:
         self.changes.append((Action.insert, record))
@@ -17,20 +21,25 @@ class Transaction:
     def delete(self, record_id: UUID) -> None:
         self.changes.append((Action.delete, record_id))
 
-    def commit(self) -> list[Item]:
+    def commit(self, transaction_id: UUID) -> list[Item] | None:
         if self.parent:
             self.parent.merge_changes(self.changes)
+            self.parent.active_child.remove(transaction_id)
+            return None
         else:
+            backup: list[Item] = self.storage.copy()
             for action, data in self.changes:
-                if action == Action.insert:
-                    self.backup.append(data)
-                elif action == Action.delete:
-                    self.backup = [
-                        item for item in self.storage if item.id != data
-                    ]
-
-        self.changes.clear()
-        return self.backup
+                try:
+                    if action == Action.insert:
+                        backup.append(data)
+                    elif action == Action.delete:
+                        backup = [
+                            item for item in self.storage if item.id != data
+                        ]
+                except Exception:
+                    raise TransactionException
+            self.changes.clear()
+            return backup
 
     def rollback(self) -> None:
         self.changes.clear()
